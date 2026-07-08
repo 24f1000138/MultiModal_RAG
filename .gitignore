@@ -1,0 +1,39 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Uploaded documents
+uploads/
+
+# Extracted images
+extracted_images/
+
+# Temporary files
+temp_batches/
+ocr_sample.pdf
+
+# FAISS index files
+*.bin
+*.npy
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+
+# Database (if you don't want to upload it)
+*.db
+*.sqlite3
+
+# Model cache (optional)
+.cache/
