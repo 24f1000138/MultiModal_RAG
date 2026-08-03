@@ -53,7 +53,7 @@ def rank_table_rows(query, rows):
     )
     return best_row
 
-def rerank_chunks(query, retrieved_chunks, final_k=3):
+def rerank_chunks(query, retrieved_chunks, final_k=5):
     if not retrieved_chunks:
         return []
 
@@ -80,7 +80,7 @@ def search_documents(keyword):
     docs = (session.query(Chunk.source_file).distinct().filter(Chunk.source_file.ilike(f"%{keyword}%")).all())
     return [doc[0] for doc in docs]
 
-def retrieve_all_documents(query, candidate_k=20, top_k=3):
+def retrieve_all_documents(query, candidate_k=20, top_k=5):
     if faiss_index is None:
         return []
     
@@ -111,7 +111,8 @@ def retrieve_all_documents(query, candidate_k=20, top_k=3):
     return rerank_chunks(query,retrieved_chunks,top_k)
 
 
-def retrieve_document(query, source_files, candidate_k=20, top_k=3):
+def retrieve_document(query, source_files, candidate_k=20, top_k=5):
+    s=0
     if faiss_index is None:
         return []
     
@@ -127,8 +128,13 @@ def retrieve_document(query, source_files, candidate_k=20, top_k=3):
 
     if not candidate_positions:
         return []
-    
+    start = time.time()
     candidate_vectors = (faiss_index.reconstruct_batch(candidate_positions))
+    p = time.time() - start
+    print("FAISS Reconstruction:", p)
+    s+=p
+
+    start = time.time()
     query_embedding = embedding_model.encode(f"Represent this sentence for searching relevant passages: {query}")
     query_embedding = (query_embedding / np.linalg.norm(query_embedding))
     norms = np.linalg.norm(candidate_vectors,axis=1,keepdims=True)
@@ -136,13 +142,19 @@ def retrieve_document(query, source_files, candidate_k=20, top_k=3):
     candidate_vectors = (candidate_vectors / norms)
     scores = np.dot(candidate_vectors,query_embedding)
     top_indices = np.argsort(scores)[::-1][:candidate_k]
+    p = time.time() - start
+    print("Cosine Similarity:", p)
+    s+=p
     retrieved_chunks = []
 
     for idx in top_indices:
         position = candidate_positions[idx]
         chunk_id = chunk_id_mapping[position]
+        start = time.time()
         chunk = (session.query(Chunk).filter(Chunk.chunk_id == chunk_id).first())
-
+        p = time.time() - start
+        print("DB:", p)
+        s+=p
         if chunk:
             retrieved_content = chunk.content
             if chunk.chunk_type == "TableItem":
@@ -159,5 +171,5 @@ def retrieve_document(query, source_files, candidate_k=20, top_k=3):
                     "chunk": chunk,
                     "retrieved_content": retrieved_content
                 })
-
+    print("Total Time:", s)
     return rerank_chunks(query,retrieved_chunks,top_k)
