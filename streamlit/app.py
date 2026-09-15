@@ -1,9 +1,12 @@
-import os
 import streamlit as st
+import os
+import sys
 
-from ingestion import ingest_document
-from retrieval import (retrieve_document,retrieve_all_documents, search_documents)
-from llm import generate_answer
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, PROJECT_ROOT)
+from backend.ingestion import ingest_document
+from backend.retrieval import (retrieve_document,retrieve_all_documents, search_documents, load_vector_store)
+from backend.llm import generate_answer
 from streamlit_pdf_viewer import pdf_viewer
 
 st.set_page_config(page_title="Multimodal RAG",page_icon="📚",layout="wide")
@@ -29,7 +32,7 @@ if uploaded_file:
     if st.sidebar.button("Ingest Document"):
         with st.spinner("Ingesting..."):
             ingest_document(save_path, ocr_mode=ocr_mode)
-
+        load_vector_store()
         st.sidebar.success("Ingestion Complete")
 
 st.header("Search")

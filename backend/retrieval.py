@@ -2,10 +2,12 @@ import faiss
 import numpy as np
 
 from sentence_transformers import SentenceTransformer, CrossEncoder
-from models import (Chunk,SessionLocal)
+from backend.models import Chunk, SessionLocal
+from pathlib import Path
 
-FAISS_INDEX_PATH = "rag2_faiss_index.bin"
-MAPPING_PATH = "rag2_chunk_mapping.npy"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+FAISS_INDEX_PATH = PROJECT_ROOT / "rag2_faiss_index.bin"
+MAPPING_PATH = PROJECT_ROOT / "rag2_chunk_mapping.npy"
 
 import os
 import time
@@ -14,15 +16,46 @@ embedding_model = SentenceTransformer("BAAI/bge-base-en-v1.5")
 reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 session = SessionLocal()
 
-if (os.path.exists(FAISS_INDEX_PATH) and os.path.exists(MAPPING_PATH)):
-    faiss_index = faiss.read_index(FAISS_INDEX_PATH)
-    chunk_id_mapping = np.load(MAPPING_PATH,allow_pickle=True).tolist()
-    chunk_id_to_position = {chunk_id: position for position, chunk_id in enumerate(chunk_id_mapping)}
+faiss_index = None
+chunk_id_mapping = []
+chunk_id_to_position = {}
 
-else:
-    faiss_index = None
-    chunk_id_mapping = []
-    chunk_id_to_position = {}
+
+def load_vector_store():
+    global faiss_index
+    global chunk_id_mapping
+    global chunk_id_to_position
+
+    if (
+        FAISS_INDEX_PATH.exists()
+        and MAPPING_PATH.exists()
+    ):
+        faiss_index = faiss.read_index(
+            str(FAISS_INDEX_PATH)
+        )
+
+        chunk_id_mapping = np.load(
+            str(MAPPING_PATH),
+            allow_pickle=True
+        ).tolist()
+
+        chunk_id_to_position = {
+            chunk_id: position
+            for position, chunk_id in enumerate(chunk_id_mapping)
+        }
+
+        print(
+            "Vector store loaded:",
+            faiss_index.ntotal,
+            "vectors"
+        )
+
+    else:
+        faiss_index = None
+        chunk_id_mapping = []
+        chunk_id_to_position = {}
+
+        print("FAISS or mapping file does not exist.")
 
 def extract_rows(table_content):
     rows = []
@@ -81,6 +114,7 @@ def search_documents(keyword):
     return [doc[0] for doc in docs]
 
 def retrieve_all_documents(query, candidate_k=20, top_k=5):
+    load_vector_store()
     if faiss_index is None:
         return []
     
@@ -112,6 +146,7 @@ def retrieve_all_documents(query, candidate_k=20, top_k=5):
 
 
 def retrieve_document(query, source_files, candidate_k=20, top_k=5):
+    load_vector_store()
     s=0
     if faiss_index is None:
         return []

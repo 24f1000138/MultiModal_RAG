@@ -1,5 +1,26 @@
 import pytesseract
-from vision_model import (generate_image_description)
+from backend.vision_model import (generate_image_description)
+
+def build_metadata(
+    element_id,
+    element_type,
+    page_number=None,
+    section_id=None,
+    section_path=None,
+    parent_id=None,
+    document_order=None,
+    bbox=None
+):
+    return {
+        "element_id": element_id,
+        "element_type": element_type,
+        "page_number": page_number,
+        "section_id": section_id,
+        "section_path": section_path,
+        "parent_id": parent_id,
+        "document_order": document_order,
+        "bbox": bbox
+    }
 
 def serialize_text(item):
     return item.text.strip()

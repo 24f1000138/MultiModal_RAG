@@ -4,24 +4,34 @@ import faiss
 import numpy as np
 import fitz
 import gc
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+UPLOAD_DIR = PROJECT_ROOT / "uploads"
+EXTRACTED_IMAGES_DIR = PROJECT_ROOT / "extracted_images"
+TEMP_BATCH_DIR = PROJECT_ROOT / "temp_batches"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+EXTRACTED_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+TEMP_BATCH_DIR.mkdir(parents=True, exist_ok=True)
 
 from sentence_transformers import SentenceTransformer
-from models import (Chunk,SessionLocal)
+from backend.models import Chunk, SessionLocal
 from docling.datamodel.pipeline_options import (PdfPipelineOptions)
 from docling.document_converter import (DocumentConverter,PdfFormatOption)
 from docling.datamodel.base_models import (InputFormat)
-from serializers import (serialize_text,serialize_table,serialize_picture,serialize_formula)
+from backend.serializers import (serialize_text,serialize_table,serialize_picture,serialize_formula)
 from collections import defaultdict
 
 EMBEDDING_DIMENSION = 768
-FAISS_INDEX_PATH = "rag2_faiss_index.bin"
-MAPPING_PATH = "rag2_chunk_mapping.npy"
+FAISS_INDEX_PATH = PROJECT_ROOT / "rag2_faiss_index.bin"
+MAPPING_PATH = PROJECT_ROOT / "rag2_chunk_mapping.npy"
 
 embedding_model = SentenceTransformer("BAAI/bge-base-en-v1.5")
 
 if os.path.exists(FAISS_INDEX_PATH):
-    faiss_index = faiss.read_index(FAISS_INDEX_PATH)
-    chunk_id_mapping = np.load(MAPPING_PATH,allow_pickle=True).tolist()
+    faiss_index = faiss.read_index(str(FAISS_INDEX_PATH))
+    chunk_id_mapping = np.load(str(MAPPING_PATH), allow_pickle=True).tolist()
     print("Loaded existing FAISS index.")
 
 else:
@@ -30,19 +40,18 @@ else:
     print("Created new FAISS index.")
 
 session = SessionLocal()
-os.makedirs("extracted_images",exist_ok=True)
 
 def split_pdf_into_batches(pdf_path, batch_size=25):
     pdf = fitz.open(pdf_path)
     batch_files = []
     total_pages = len(pdf)
-    os.makedirs("temp_batches", exist_ok=True)
+    TEMP_BATCH_DIR.mkdir(parents=True, exist_ok=True)
     for start in range(0, total_pages, batch_size):
         end = min(start + batch_size, total_pages)
         batch_pdf = fitz.open()
         batch_pdf.insert_pdf(pdf,from_page=start,to_page=end - 1)
-        batch_path = (f"temp_batches/"f"temp_batch_{start}_{end}.pdf")
-        batch_pdf.save(batch_path)
+        batch_path =  TEMP_BATCH_DIR / f"batch_{start}_to_{end}.pdf"
+        batch_pdf.save(str(batch_path))
         batch_pdf.close()
         batch_files.append((batch_path, start))
 
@@ -66,14 +75,14 @@ def create_single_page_pdf(original_pdf, page_number):
     pdf = fitz.open(original_pdf)
     mini = fitz.open()
     mini.insert_pdf(pdf,from_page=page_number,to_page=page_number)
-    os.makedirs("temp_batches", exist_ok=True)
+    TEMP_BATCH_DIR.mkdir(parents=True, exist_ok=True)
 
-    output = (f"temp_batches/"f"page_{page_number+1}.pdf")
-    mini.save(output)
+    output = TEMP_BATCH_DIR / f"page_{page_number + 1}.pdf"
+    mini.save(str(output))
 
     mini.close()
     pdf.close()
-    return output
+    return str(output)
 
 def detect_scanned_pdf(pdf_path):
     temp_pdf = fitz.open()
@@ -85,9 +94,8 @@ def detect_scanned_pdf(pdf_path):
         to_page=min(9, len(original)-1)
     )
 
-    sample_pdf = "ocr_sample.pdf"
-
-    temp_pdf.save(sample_pdf)
+    sample_pdf = TEMP_BATCH_DIR / "sample.pdf"
+    temp_pdf.save(str(sample_pdf))
 
     temp_pdf.close()
     original.close()
@@ -95,7 +103,7 @@ def detect_scanned_pdf(pdf_path):
     pipeline_options.do_ocr = False
     converter = DocumentConverter(format_options={InputFormat.PDF:PdfFormatOption(pipeline_options=pipeline_options)})
 
-    result = converter.convert(sample_pdf)
+    result = converter.convert(str(sample_pdf))
     document = result.document
     total_text = 0
 
@@ -108,8 +116,8 @@ def detect_scanned_pdf(pdf_path):
 
     del result
     gc.collect()
-    if os.path.exists(sample_pdf):
-        os.remove(sample_pdf)
+    if sample_pdf.exists():
+        sample_pdf.unlink()
     return total_text < 1000
 
 def convert_batch(pdf_path, pipeline_options):
@@ -149,8 +157,8 @@ def ingest_document(pdf_path, ocr_mode="Auto Detect"):
         process_document(result.document,pdf_path,page_offset=0)
         try:
             session.commit()
-            faiss.write_index(faiss_index, FAISS_INDEX_PATH)
-            np.save(MAPPING_PATH, np.array(chunk_id_mapping))
+            faiss.write_index(faiss_index,str(FAISS_INDEX_PATH))
+            np.save(str(MAPPING_PATH),np.array(chunk_id_mapping))
 
         except Exception:
             session.rollback()
@@ -215,8 +223,8 @@ def ingest_document(pdf_path, ocr_mode="Auto Detect"):
 
             try:
                 session.commit()
-                faiss.write_index(faiss_index, FAISS_INDEX_PATH)
-                np.save(MAPPING_PATH, np.array(chunk_id_mapping))
+                faiss.write_index(faiss_index, str(FAISS_INDEX_PATH))
+                np.save(str(MAPPING_PATH), np.array(chunk_id_mapping))
 
             except Exception:
                 session.rollback()
@@ -302,13 +310,18 @@ def process_document(document,pdf_path,page_offset=0,chunk_index_start=0):
         elif chunk_type == "PictureItem":
             content, img = serialize_picture(element, document, text_lookup)
             if img:
-                image_path = (
-                    f"extracted_images/"
-                    f"{document_name}_"
+                image_filename = (
+                    f"{Path(document_name).stem}_"
                     f"page_{page_number}_"
                     f"picture_{chunk_index}.png"
                 )
-                img.save(image_path)
+
+                absolute_image_path = EXTRACTED_IMAGES_DIR / image_filename
+
+                img.save(str(absolute_image_path))
+                image_path = str(
+                    absolute_image_path.relative_to(PROJECT_ROOT)
+                ).replace("\\", "/")
 
         elif chunk_type == "FormulaItem":
             print("\nFOUND FORMULA ITEM")
@@ -372,5 +385,4 @@ def process_document(document,pdf_path,page_offset=0,chunk_index_start=0):
         )
             
         chunk_index += 1
-
     return chunk_index

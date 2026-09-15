@@ -27,6 +27,8 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, mode: "all" }),
     }).then((r) => r.json()),
+  getEvaluation: (evaluationId) =>
+    fetch(`${API_BASE}/evaluation/${evaluationId}`).then((r) => r.json()),
 };
 
 function useTypewriter(text, speed = 18) {
@@ -271,6 +273,193 @@ function AnswerCard({ answer }) {
   );
 }
 
+function EvaluationCard({ evaluation, status }) {
+  if (status === "pending") {
+    return (
+      <GlassCard style={{ padding: 20 }}>
+        <SectionLabel>Answer Evaluation</SectionLabel>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            color: "rgba(255,255,255,0.6)",
+            fontSize: 14,
+          }}
+        >
+          <Spinner />
+          Evaluating generated answer…
+        </div>
+      </GlassCard>
+    );
+  }
+
+  if (status === "failed") {
+    return (
+      <GlassCard style={{ padding: 20 }}>
+        <SectionLabel>Answer Evaluation</SectionLabel>
+        <p style={{ color: "#f87171", fontSize: 14 }}>
+          Evaluation failed.
+        </p>
+      </GlassCard>
+    );
+  }
+
+  if (status !== "completed" || !evaluation) {
+    return null;
+  }
+
+  const criteria = [
+    {
+      name: "Context Relevance",
+      data: evaluation.context_relevance,
+    },
+    {
+      name: "Faithfulness",
+      data: evaluation.faithfulness,
+    },
+    {
+      name: "Answer Relevance",
+      data: evaluation.answer_relevance,
+    },
+    {
+      name: "Answer Completeness",
+      data: evaluation.answer_completeness,
+    },
+  ];
+
+  return (
+    <GlassCard glow="#0ea5e9" style={{ padding: 24 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: 20,
+        }}
+      >
+        <SectionLabel>Answer Evaluation</SectionLabel>
+
+        <Badge color="#0ea5e9">LLM Evaluation</Badge>
+      </div>
+
+      <div
+        style={{
+          padding: 16,
+          borderRadius: 12,
+          background: "rgba(14,165,233,0.1)",
+          border: "1px solid rgba(14,165,233,0.25)",
+          marginBottom: 20,
+        }}
+      >
+        <div
+          style={{
+            color: "rgba(255,255,255,0.5)",
+            fontSize: 12,
+            marginBottom: 6,
+          }}
+        >
+          Overall Answer Quality
+        </div>
+
+        <div
+          style={{
+            fontSize: 32,
+            fontWeight: 700,
+            color: "#7dd3fc",
+          }}
+        >
+          {evaluation.answer_quality?.overall_score ?? "N/A"} / 5
+        </div>
+
+        <div
+          style={{
+            color: "rgba(255,255,255,0.7)",
+            fontSize: 13,
+            lineHeight: 1.6,
+            marginTop: 8,
+          }}
+        >
+          {evaluation.answer_quality?.reason}
+        </div>
+      </div>
+
+      {criteria.map((criterion) => (
+        <div
+          key={criterion.name}
+          style={{
+            padding: "14px 0",
+            borderBottom: "1px solid rgba(255,255,255,0.08)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              marginBottom: 6,
+            }}
+          >
+            <strong style={{ fontSize: 14 }}>
+              {criterion.name}
+            </strong>
+
+            <Badge color="#a5b4fc">
+              {criterion.data?.score ?? "N/A"} / 5
+            </Badge>
+          </div>
+
+          <div
+            style={{
+              color: "rgba(255,255,255,0.6)",
+              fontSize: 13,
+              lineHeight: 1.6,
+            }}
+          >
+            {criterion.data?.reason || "No reason provided."}
+          </div>
+        </div>
+      ))}
+
+      <div style={{ marginTop: 20 }}>
+        <h3 style={{ fontSize: 14, marginBottom: 10 }}>
+          Unsupported Claims
+        </h3>
+
+        {!evaluation.unsupported_claims ||
+        evaluation.unsupported_claims.length === 0 ? (
+          <div
+            style={{
+              color: "#86efac",
+              fontSize: 13,
+            }}
+          >
+            ✓ No unsupported claims detected.
+          </div>
+        ) : (
+          <ul
+            style={{
+              color: "rgba(255,255,255,0.7)",
+              fontSize: 13,
+              lineHeight: 1.6,
+              paddingLeft: 20,
+            }}
+          >
+            {evaluation.unsupported_claims.map((claim, index) => (
+              <li key={index}>
+                {typeof claim === "string"
+                  ? claim
+                  : JSON.stringify(claim)}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </GlassCard>
+  );
+}
+
 function ChunkCard({ chunk, content, index, onOpenPDF }) {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -372,6 +561,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [answer, setAnswer] = useState("");
   const [chunks, setChunks] = useState([]);
+  const [evaluation, setEvaluation] = useState(null);
+  const [evaluationStatus, setEvaluationStatus] = useState("");
   const [pdfChunk, setPdfChunk] = useState(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [toast, setToast] = useState(null);
@@ -406,23 +597,78 @@ export default function App() {
     }
     setSearchingDocs(false);
   }, []);
+  const pollEvaluation = async (evaluationId) => {
+    const maxAttempts = 60;
 
-  const handleAsk = async () => {
-    if (!query.trim()) { showToast("Please enter a question"); return; }
-    if (searchMode === "Specific Document" && selectedDocs.length === 0) {
-      showToast("Please select at least one document"); return;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const data = await api.getEvaluation(evaluationId);
+
+        setEvaluationStatus(data.status);
+
+        if (data.status === "completed") {
+          setEvaluation(data.evaluation);
+          return;
+        }
+
+        if (data.status === "failed") {
+          console.error("Evaluation failed:", data.error);
+          return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      } catch (error) {
+        console.error("Could not fetch evaluation:", error);
+        return;
+      }
     }
-    setLoading(true); setAnswer(""); setChunks([]);
+
+    console.warn("Evaluation polling timed out.");
+  };
+    const handleAsk = async () => {
+    if (!query.trim()) {
+      showToast("Please enter a question");
+      return;
+    }
+
+    if (searchMode === "Specific Document" && selectedDocs.length === 0) {
+      showToast("Please select at least one document");
+      return;
+    }
+
+    setLoading(true);
+    setAnswer("");
+    setChunks([]);
+    setEvaluation(null);
+    setEvaluationStatus("");
+
     try {
-      const data = searchMode === "Specific Document"
-        ? await api.retrieveDocument(query, selectedDocs)
-        : await api.retrieveAll(query);
+      const data =
+        searchMode === "Specific Document"
+          ? await api.retrieveDocument(query, selectedDocs)
+          : await api.retrieveAll(query);
+
+      // Display the generated answer immediately
       setAnswer(data.answer || "");
+
+      // Display retrieved chunks
       setChunks(data.chunks || []);
-    } catch {
-      setAnswer("⚠ Could not connect to backend. Make sure your Python API server is running on localhost:8000.");
+
+      // Start evaluation polling separately
+      if (data.evaluation_id) {
+        setEvaluationStatus(data.evaluation_status || "pending");
+        pollEvaluation(data.evaluation_id);
+      }
+    } catch (error) {
+      console.error(error);
+
+      setAnswer(
+        "⚠ Could not connect to backend. Make sure your Python API server is running on localhost:8000."
+      );
+
       setChunks([]);
     }
+
     setLoading(false);
   };
 
@@ -634,6 +880,16 @@ export default function App() {
             {answer && !loading && (
               <div style={{ animation: "fadeIn 0.4s ease" }}>
                 <AnswerCard answer={answer} />
+              </div>
+            )}
+
+            {/* Evaluation */}
+            {answer && !loading && evaluationStatus && (
+              <div style={{ animation: "fadeIn 0.4s ease" }}>
+                <EvaluationCard
+                  evaluation={evaluation}
+                  status={evaluationStatus}
+                />
               </div>
             )}
 
